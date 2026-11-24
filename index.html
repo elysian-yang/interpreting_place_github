@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CAR PARK</title>
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Three.js 从 CDN 加载 -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- 3D 画面（全景圆柱）会放进这里 -->
+  <div id="stage" role="img" aria-label="Hand-drawn panorama of the car park entrance"></div>
+
+  <!-- 视角指示条 -->
+  <div id="meter"><i></i><span id="dot"></span></div>
+
+  <!-- 起始页：白底，点 start 后变黑 -->
+  <div id="intro">
+    <h1>CAR PARK</h1>
+    <button id="start">start</button>
+    <p id="status"></p>
+  </div>
+
+  <!-- 调试面板：按 D 开关，按 C 重新校准中心 -->
+  <div id="debug" class="hidden">
+    <video id="cam" playsinline muted></video>
+    <p id="readout">—</p>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reflection Cube — Test</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:ui-monospace,Menlo,Consolas,monospace;color:#bbb}
+  canvas{display:block}
+  #hud{position:fixed;left:18px;top:16px;font-size:11px;letter-spacing:.12em;line-height:1.7;pointer-events:none}
+  #hud b{color:#fff;font-weight:400}
+  #ctrl{position:fixed;left:18px;bottom:16px;display:flex;gap:8px}
+  button{background:transparent;color:#aaa;border:1px solid #444;font:inherit;font-size:11px;letter-spacing:.1em;padding:6px 10px;cursor:pointer}
+  button:hover{color:#fff;border-color:#888}
+  #tip{position:fixed;pointer-events:none;font-size:10px;letter-spacing:.15em;color:#fff;opacity:0;transition:opacity .15s;transform:translate(14px,-50%)}
+</style>
+</head>
+<body>
+<div id="hud">REFLECTION / CUBE<br>MIRRORS ARE FIXED · ORBIT TO FIND EACH ONE'S SWEET SPOT<br>CLICK = REVEAL WHAT YOU SEE IN IT NOW<br>FRAGMENTS <b id="count">0</b></div>
+<div id="ctrl">
+  <button id="reset">RESET</button>
+  <button id="ghost">SHOW TRUE OUTLINE</button>
+</div>
+<div id="tip"></div>
+<div id="msg" style="position:fixed;left:50%;bottom:22px;transform:translateX(-50%);font-size:11px;letter-spacing:.15em;color:#888;opacity:0;transition:opacity .3s;pointer-events:none"></div>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 200);
+camera.position.set(0,1.5,13);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.minDistance = 4; controls.maxDistance = 30;
+
+scene.add(new THREE.AmbientLight(0xffffff,0.35));
+const dl = new THREE.DirectionalLight(0xffffff,1.6); dl.position.set(4,6,8); scene.add(dl);
+const dl2 = new THREE.DirectionalLight(0xffffff,0.5); dl2.position.set(-6,-3,-4); scene.add(dl2);
+
+/* ---------- 隐藏场景：真实正方体，只存在于反射里 ---------- */
+const hidden = new THREE.Scene();
+hidden.background = new THREE.Color(0x000000);
+hidden.add(new THREE.AmbientLight(0xffffff,0.22));
+const h1 = new THREE.DirectionalLight(0xffffff,1.3); h1.position.set(3,5,4); hidden.add(h1);
+const h2 = new THREE.DirectionalLight(0xffffff,0.45); h2.position.set(-4,-2,-3); hidden.add(h2);
+function gridTex(){
+  const c=document.createElement('canvas'); c.width=c.height=256; const g=c.getContext('2d');
+  g.fillStyle='#d8d8d8'; g.fillRect(0,0,256,256);
+  g.strokeStyle='rgba(0,0,0,.18)';
+  for(let i=0;i<=8;i++){const p=i*32;g.beginPath();g.moveTo(p,0);g.lineTo(p,256);g.stroke();g.beginPath();g.moveTo(0,p);g.lineTo(256,p);g.stroke();}
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; return t;
+}
+hidden.add(new THREE.Mesh(new THREE.BoxGeometry(2,2,2), new THREE.MeshStandardMaterial({map:gridTex(),roughness:.8})));
+hidden.add(new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(2.002,2.002,2.002)), new THREE.LineBasicMaterial({color:0xffffff})));
+
+const ghost = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(2,2,2)), new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:.12}));
+ghost.visible=false; scene.add(ghost);
+
+/* ---------- 材质 ---------- */
+const TYPES = {line:0, wood:1, ripple:2, solid:3, frost:4, liquid:5};
+const TYPE_NAME = ['LINE','WOOD','RIPPLE','SOLID','FROST','LIQUID'];
+
+// 镜面：真实平面反射（投影贴图）
+const discVert = `uniform mat4 texMat; varying vec4 vProj; varying vec2 vUv;
+void main(){ vUv=uv; vProj=texMat*vec4(position,1.0); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `;
+const discFrag = `
+uniform sampler2D map; uniform float t; uniform int type; uniform float facing; uniform float hover; uniform float flash; uniform float live;
+varying vec4 vProj; varying vec2 vUv;
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+void main(){
+  vec2 c=vUv-0.5; float r=length(c);
+  if(r>0.5) discard;
+  if(!gl_FrontFacing || live<0.5){ gl_FragColor=vec4(vec3(0.05+hover*0.05+flash*0.2),1.0); return; }
+  vec2 uv=vProj.xy/vProj.w; vec2 o=vec2(0.0);
+  if(type==2){ o= normalize(c+1e-5)*sin(r*42.0-t*3.0)*0.006*smoothstep(0.0,0.15,r); }
+  if(type==5){ o= vec2(sin(c.y*9.0+t*1.3),cos(c.x*8.0+t*1.1))*0.008; }
+  uv+=o;
+  vec3 col;
+  if(type==4){ col=vec3(0.0); for(int i=0;i<10;i++){ vec2 j=vec2(hash(vUv*float(i+3)),hash(vUv*float(i+7)))-0.5; col+=texture2D(map,uv+j*0.02).rgb; } col/=10.0; col+=(hash(vUv*500.0)-0.5)*0.08; }
+  else if(type==5){ col=vec3(texture2D(map,uv+vec2(0.003,0)).r,texture2D(map,uv).g,texture2D(map,uv-vec2(0.003,0)).b)*vec3(0.85,0.95,1.05); }
+  else col=texture2D(map,uv).rgb;
+  if(type==1){ float g=sin((vUv.x+sin(vUv.y*7.0)*0.04)*90.0); col=col*vec3(1.0,0.86,0.68)+g*0.03; }
+  if(type==3){ col*=0.85; col+=pow(smoothstep(0.3,0.5,r),3.0)*0.3; }
+  col+= vec3(0.04);                         // 镜面本身一点灰，空镜子也看得出
+  col*= 1.0-smoothstep(0.34,0.5,r)*0.5;
+  col*= 0.35+0.65*facing;
+  col+= hover*0.06 + flash*0.5;
+  gl_FragColor=vec4(col,1.0);
+}`;
+
+// 碎片：只显示你在镜子里真正看到的那部分（mask）
+const fragFrag = `
+uniform int type; uniform float t; uniform sampler2D mask; uniform float opacity; uniform float shade;
+varying vec2 vUv;
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+void main(){
+  vec2 p=vUv;
+  if(type==2) p+= vec2(sin(p.y*14.0+t*2.0),cos(p.x*14.0+t*1.7))*0.008;
+  if(type==5) p+= vec2(sin(p.y*6.0+t),cos(p.x*5.0+t*0.8))*0.012;
+  if(p.x<0.0||p.x>1.0||p.y<0.0||p.y>1.0) discard;
+  float m=texture2D(mask,p).r;
+  float lo = type==3 ? 0.45 : (type==4 ? 0.15 : 0.3);
+  float hi = type==3 ? 0.55 : 0.7;
+  m=smoothstep(lo,hi,m);
+  if(type==2) m*= 0.75+0.25*sin(length(p-0.5)*60.0-t*3.0);
+  if(type==4) m*= step(0.3, hash(floor(p*90.0))+m*0.3);
+  float e=min(min(p.x,1.0-p.x),min(p.y,1.0-p.y));
+  float border=1.0-smoothstep(0.0,0.012,e);
+  vec2 gg=abs(fract(p*8.0)-0.5); float grid=1.0-smoothstep(0.47,0.5,max(gg.x,gg.y));
+  vec3 col=vec3(shade)*0.6 - grid*0.06 + border*0.7;
+  if(type==1){ float g=sin((p.x+sin(p.y*7.0)*0.04)*90.0); col=col*vec3(1.0,0.86,0.68)+g*0.04; }
+  if(type==5) col*=vec3(0.85,0.95,1.05);
+  float a=m*opacity*(type==3?1.0:0.88);
+  if(a<0.01) discard;
+  gl_FragColor=vec4(col,a);
+}`;
+const fragVert = `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `;
+
+function woodTex(){
+  const c=document.createElement('canvas'); c.width=c.height=256; const g=c.getContext('2d');
+  g.fillStyle='#e8dcc8'; g.fillRect(0,0,256,256);
+  for(let i=0;i<70;i++){ g.strokeStyle=`rgba(90,60,30,${.08+Math.random()*.2})`; g.lineWidth=.5+Math.random()*1.5; g.beginPath();
+    const y=Math.random()*256; for(let x=0;x<=256;x+=8){ g.lineTo(x, y+Math.sin(x*.03+i)*6); } g.stroke(); }
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; return t;
+}
+
+/* ---------- 反射点：位置 + 固定朝向（sweet = 最佳观看位置） ---------- */
+const START = new THREE.Vector3(0,1.5,13);
+const CONFIG = [
+  {pos:[-4.6,0.6,3.4], r:0.95, type:'line',   sweet:START},
+  {pos:[-5.5,2.2,-2.2],r:0.6,  type:'wood'},
+  {pos:[4.4,-1.8,3.2], r:1.15, type:'ripple', sweet:START},
+  {pos:[2.2,4.8,-4.5], r:0.5,  type:'solid'},
+  {pos:[-3.0,-3.8,2.6],r:0.42, type:'frost'},
+  {pos:[6.5,1.2,-5.5], r:0.85, type:'liquid'},
+];
+function randomSweet(pos){
+  const toCube=pos.clone().negate().normalize();
+  for(;;){
+    const a=Math.random()*Math.PI*2, y=-0.3+Math.random()*0.9;
+    const v=new THREE.Vector3(Math.cos(a)*Math.sqrt(1-y*y),y,Math.sin(a)*Math.sqrt(1-y*y)).multiplyScalar(13);
+    const toS=v.clone().sub(pos).normalize();
+    if(toS.dot(toCube)>-0.5 && toS.dot(toCube)<0.6) return v;
+  }
+}
+
+const rtSize=()=>[Math.floor(innerWidth*Math.min(devicePixelRatio,2)*0.6),Math.floor(innerHeight*Math.min(devicePixelRatio,2)*0.6)];
+const mirrors=[]; const discs=[];
+CONFIG.forEach((cf,i)=>{
+  const type=TYPES[cf.type];
+  const pos=new THREE.Vector3(...cf.pos);
+  const sweet=cf.sweet?cf.sweet.clone():randomSweet(pos);
+  const normal=pos.clone().negate().normalize().add(sweet.clone().sub(pos).normalize()).normalize();
+  const group=new THREE.Group(); group.position.copy(pos);
+  group.lookAt(pos.clone().add(normal));
+  scene.add(group); group.updateMatrixWorld();
+
+  const rt=new THREE.WebGLRenderTarget(...rtSize()); rt.texture.colorSpace=THREE.SRGBColorSpace;
+  const mat=new THREE.ShaderMaterial({vertexShader:discVert,fragmentShader:discFrag,side:THREE.DoubleSide,
+    uniforms:{map:{value:rt.texture},texMat:{value:new THREE.Matrix4()},t:{value:0},type:{value:type},facing:{value:1},hover:{value:0},flash:{value:0},live:{value:1}}});
+  const disc=new THREE.Mesh(new THREE.CircleGeometry(cf.r,96),mat);
+  disc.userData.idx=i; group.add(disc); discs.push(disc);
+
+  let rim=null;
+  if(cf.type==='line'){
+    group.add(new THREE.Mesh(new THREE.RingGeometry(cf.r,cf.r+0.014,128),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide})));
+  } else if(cf.type==='wood'){
+    const wm=new THREE.MeshStandardMaterial({map:woodTex(),roughness:.9,side:THREE.DoubleSide});
+    const ring=new THREE.Mesh(new THREE.CylinderGeometry(cf.r*1.14,cf.r*1.14,0.1,96,1,true),wm); ring.rotation.x=Math.PI/2; group.add(ring);
+    const face=new THREE.Mesh(new THREE.RingGeometry(cf.r,cf.r*1.14,96),wm); face.position.z=0.05; group.add(face);
+    const back=new THREE.Mesh(new THREE.CircleGeometry(cf.r*1.14,96),wm); back.position.z=-0.05; group.add(back);
+  } else if(cf.type==='solid'){
+    group.add(new THREE.Mesh(new THREE.TorusGeometry(cf.r*1.06,cf.r*0.09,32,128),new THREE.MeshStandardMaterial({color:0xe6e6e6,metalness:.6,roughness:.28})));
+    const back=new THREE.Mesh(new THREE.CylinderGeometry(cf.r*1.06,cf.r*1.06,cf.r*0.18,96),new THREE.MeshStandardMaterial({color:0x222222,metalness:.4,roughness:.5}));
+    back.rotation.x=Math.PI/2; back.position.z=-cf.r*0.1; group.add(back);
+  } else if(cf.type==='frost'){
+    const n=180, arr=new Float32Array(n*3);
+    for(let k=0;k<n;k++){const a=k/n*Math.PI*2, rr=cf.r*(1.02+Math.random()*0.06); arr.set([Math.cos(a)*rr,Math.sin(a)*rr,(Math.random()-.5)*.02],k*3);}
+    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(arr,3));
+    group.add(new THREE.Points(g,new THREE.PointsMaterial({color:0xffffff,size:0.025,transparent:true,opacity:.8})));
+  } else {
+    const n=200, g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(n*3),3));
+    rim=new THREE.LineLoop(g,new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:.9})); group.add(rim);
+    if(cf.type==='ripple'){ const r2=new THREE.LineLoop(g.clone(),new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:.35})); group.add(r2); rim.userData.twin=r2; }
+  }
+  const vcam=new THREE.PerspectiveCamera();
+  mirrors.push({cf,type,pos,normal,group,disc,rt,mat,rim,vcam,flash:0});
+});
+
+function updateRim(m,t){
+  const draw=(line,off)=>{
+    const p=line.geometry.attributes.position, n=p.count, r=m.cf.r;
+    for(let k=0;k<n;k++){
+      const a=k/n*Math.PI*2; let rr, rot=0;
+      if(m.cf.type==='ripple'){ rr=r*(1.02+off*0.06)+Math.sin(a*7+t*1.4+off)*0.018*r; rot=t*0.35; }
+      else rr=r*(1.03+0.05*Math.sin(a*3+t*0.9)+0.03*Math.sin(a*5-t*1.3)+0.015*Math.sin(a*11+t*2.1));
+      p.setXYZ(k,Math.cos(a+rot)*rr,Math.sin(a+rot)*rr,0);
+    }
+    p.needsUpdate=true;
+  };
+  draw(m.rim,0); if(m.rim.userData.twin) draw(m.rim.userData.twin,1);
+}
+
+/* ---------- 平面反射：把你的相机按镜面翻过去 ---------- */
+const _v=new THREE.Vector3(), _t=new THREE.Vector3(), _rot=new THREE.Matrix4(), _look=new THREE.Vector3();
+const BIAS=new THREE.Matrix4().set(0.5,0,0,0.5, 0,0.5,0,0.5, 0,0,0.5,0.5, 0,0,0,1);
+function updateReflection(m){
+  const M=m.pos, N=m.normal, cam=camera;
+  _v.subVectors(M,cam.position);
+  if(_v.dot(N)>0){ m.mat.uniforms.live.value=0; return false; }   // 你在镜子背面
+  m.mat.uniforms.live.value=1;
+  _v.reflect(N).negate().add(M);
+  _rot.extractRotation(cam.matrixWorld);
+  _look.set(0,0,-1).applyMatrix4(_rot).add(cam.position);
+  _t.subVectors(M,_look).reflect(N).negate().add(M);
+  const vc=m.vcam;
+  vc.position.copy(_v);
+  vc.up.set(0,1,0).applyMatrix4(_rot).reflect(N);
+  vc.lookAt(_t);
+  vc.far=cam.far; vc.updateMatrixWorld();
+  vc.projectionMatrix.copy(cam.projectionMatrix);
+  m.mat.uniforms.texMat.value.copy(BIAS).multiply(vc.projectionMatrix).multiply(vc.matrixWorldInverse).multiply(m.disc.matrixWorld);
+  return true;
+}
+
+/* ---------- 点击：算出“你此刻在这面镜子里看到的部分” ---------- */
+const FACES=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].map(a=>new THREE.Vector3(...a));
+const Z=new THREE.Vector3(0,0,1);
+const lightDir=new THREE.Vector3(3,5,4).normalize();
+const RES=28;
+function faceQuat(n){ return new THREE.Quaternion().setFromUnitVectors(Z,n); }
+
+function visibleMask(m, fi){
+  const n=FACES[fi], q=faceQuat(n), C=camera.position, M=m.pos, N=m.normal, r=m.cf.r;
+  const vc=m.vcam.position;
+  const data=new Uint8Array(RES*RES*4); let count=0;
+  const P=new THREE.Vector3(), Pr=new THREE.Vector3(), X=new THREE.Vector3(), d=new THREE.Vector3();
+  for(let j=0;j<RES;j++) for(let i=0;i<RES;i++){
+    const u=(i+0.5)/RES*2-1, v=(j+0.5)/RES*2-1;
+    P.set(u,v,0).applyQuaternion(q).add(n);
+    let ok=false;
+    if(_t.subVectors(vc,P).dot(n)>0){                    // 这个面朝向“镜中的你”
+      const dist=_t.subVectors(P,M).dot(N);
+      Pr.copy(P).addScaledVector(N,-2*dist);            // 镜像点
+      d.subVectors(Pr,C); const den=d.dot(N);
+      if(Math.abs(den)>1e-6){
+        const s=_t.subVectors(M,C).dot(N)/den;
+        if(s>0&&s<1){ X.copy(C).addScaledVector(d,s); if(X.distanceTo(M)<r) ok=true; }  // 视线穿过圆内
+      }
+    }
+    const k=(j*RES+i)*4; data[k]=data[k+1]=data[k+2]=ok?255:0; data[k+3]=255; if(ok)count++;
+  }
+  return {data,count};
+}
+
+const frags=[]; const clock=new THREE.Clock();
+const tip=document.getElementById('tip');
+let msgTimer=0;
+function flashMsg(text){ const el=document.getElementById('msg'); el.textContent=text; el.style.opacity=1; clearTimeout(msgTimer); msgTimer=setTimeout(()=>el.style.opacity=0,1400); }
+
+function reveal(m){
+  if(!updateReflection(m)){ m.flash=0.4; flashMsg('BACK OF THE MIRROR · NOTHING TO SEE'); return; }
+  // 镜中可见的所有面一起取出（拐角就是拐角），每面只保留可见部分
+  const vis=[];
+  for(let fi=0;fi<6;fi++){ const r=visibleMask(m,fi); if(r.count>4) vis.push({fi,...r}); }
+  if(!vis.length){ m.flash=0.4; flashMsg('NO CUBE IN THIS MIRROR FROM HERE'); return; }
+
+  // 碎片的姿态 = 镜中的像，绕你的眼睛转到正方体的位置 → 从你这里看，形状和镜中一致
+  const C=camera.position.clone(), M=m.pos, N=m.normal, O=new THREE.Vector3();
+  const Rm=new THREE.Matrix4().set(                      // 关于镜面的反射
+    1-2*N.x*N.x, -2*N.x*N.y, -2*N.x*N.z, 0,
+    -2*N.y*N.x, 1-2*N.y*N.y, -2*N.y*N.z, 0,
+    -2*N.z*N.x, -2*N.z*N.y, 1-2*N.z*N.z, 0,
+    0,0,0,1);
+  const d0=2*M.dot(N);
+  Rm.premultiply(new THREE.Matrix4().makeTranslation(N.x*d0,N.y*d0,N.z*d0));
+  const Oi=O.clone().applyMatrix4(Rm);                  // 镜中正方体中心
+  const Q=new THREE.Quaternion().setFromUnitVectors(Oi.clone().sub(C).normalize(), O.clone().sub(C).normalize());
+  const F=new THREE.Matrix4().makeTranslation(-C.x,-C.y,-C.z).premultiply(new THREE.Matrix4().makeRotationFromQuaternion(Q)).premultiply(new THREE.Matrix4().makeTranslation(C.x,C.y,C.z));
+  F.multiply(Rm);
+  const p=O.clone().applyMatrix4(F);                    // 沿视线挪到正方体中心
+  F.premultiply(new THREE.Matrix4().makeTranslation(-p.x,-p.y,-p.z));
+
+  const inner=new THREE.Group(); inner.matrixAutoUpdate=false; inner.matrix.copy(F);
+  const outer=new THREE.Group(); outer.add(inner);
+  const mats=[], texs=[];
+  vis.forEach(v=>{
+    const n=FACES[v.fi];
+    const tex=new THREE.DataTexture(v.data,RES,RES); tex.magFilter=tex.minFilter=THREE.LinearFilter; tex.needsUpdate=true;
+    const mat=new THREE.ShaderMaterial({vertexShader:fragVert,fragmentShader:fragFrag,transparent:true,depthWrite:false,side:THREE.DoubleSide,
+      uniforms:{type:{value:m.type},t:{value:0},mask:{value:tex},opacity:{value:0},shade:{value:0.45+0.55*Math.max(0,n.dot(lightDir))}}});
+    const mesh=new THREE.Mesh(new THREE.PlaneGeometry(2,2),mat);
+    mesh.quaternion.copy(faceQuat(n)); mesh.position.copy(n);
+    inner.add(mesh); mats.push(mat); texs.push(tex);
+  });
+  outer.position.copy(M); outer.scale.setScalar(0.05);
+  scene.add(outer);
+
+  const err=0.03+M.length()*0.012;                      // 只在位置上轻微偏移，越远偏得越多
+  const to=new THREE.Vector3(Math.random()-.5,Math.random()-.5,Math.random()-.5).multiplyScalar(err*2);
+  frags.push({obj:outer,mats,texs,from:M.clone(),to,start:clock.elapsedTime});
+  if(frags.length>40) disposeFrag(frags.shift());
+  m.flash=1;
+  document.getElementById('count').textContent=frags.length;
+}
+function disposeFrag(f){ scene.remove(f.obj); f.obj.traverse(o=>{if(o.geometry)o.geometry.dispose();}); f.mats.forEach(x=>x.dispose()); f.texs.forEach(x=>x.dispose()); }
+
+/* ---------- 交互 ---------- */
+const ray=new THREE.Raycaster(), mouse=new THREE.Vector2(); let hoverIdx=-1, down=null;
+function setMouse(e){mouse.x=e.clientX/innerWidth*2-1; mouse.y=-(e.clientY/innerHeight)*2+1;}
+renderer.domElement.addEventListener('pointermove',e=>{
+  setMouse(e); ray.setFromCamera(mouse,camera);
+  const h=ray.intersectObjects(discs)[0]; hoverIdx=h?h.object.userData.idx:-1;
+  renderer.domElement.style.cursor=hoverIdx>=0?'pointer':'grab';
+  if(hoverIdx>=0){tip.textContent=TYPE_NAME[mirrors[hoverIdx].type]; tip.style.left=e.clientX+'px'; tip.style.top=e.clientY+'px'; tip.style.opacity=1;} else tip.style.opacity=0;
+});
+renderer.domElement.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY];});
+renderer.domElement.addEventListener('pointerup',e=>{
+  if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>5) return;
+  setMouse(e); ray.setFromCamera(mouse,camera);
+  const h=ray.intersectObjects(discs)[0]; if(h) reveal(mirrors[h.object.userData.idx]);
+});
+document.getElementById('reset').onclick=()=>{frags.forEach(disposeFrag); frags.length=0; document.getElementById('count').textContent=0;};
+document.getElementById('ghost').onclick=e=>{ghost.visible=!ghost.visible; e.target.textContent=ghost.visible?'HIDE TRUE OUTLINE':'SHOW TRUE OUTLINE';};
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);mirrors.forEach(m=>m.rt.setSize(...rtSize()));});
+
+/* ---------- 循环 ---------- */
+const ease=x=>1-Math.pow(1-x,3);
+function loop(){
+  requestAnimationFrame(loop);
+  const t=clock.getElapsedTime(); controls.update(); camera.updateMatrixWorld();
+  mirrors.forEach((m,i)=>{
+    const toCam=_v.copy(camera.position).sub(m.pos).normalize();
+    m.mat.uniforms.t.value=t;
+    m.mat.uniforms.facing.value=Math.max(0,m.normal.dot(toCam));
+    m.mat.uniforms.hover.value+=((hoverIdx===i?1:0)-m.mat.uniforms.hover.value)*0.15;
+    m.flash*=0.92; m.mat.uniforms.flash.value=m.flash;
+    if(m.rim) updateRim(m,t);
+    if(updateReflection(m)){ renderer.setRenderTarget(m.rt); renderer.render(hidden,m.vcam); }
+  });
+  frags.forEach(f=>{
+    const k=Math.min(1,(t-f.start)/1.4), e=ease(k);
+    f.obj.position.lerpVectors(f.from,f.to,e);
+    f.obj.scale.setScalar(0.05+0.95*e);
+    f.mats.forEach(x=>{x.uniforms.opacity.value=Math.min(1,k*1.5); x.uniforms.t.value=t;});
+  });
+  renderer.setRenderTarget(null); renderer.render(scene,camera);
+}
+loop();
+</script>
+</body>
+</html>
